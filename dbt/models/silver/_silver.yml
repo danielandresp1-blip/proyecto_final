@@ -1,0 +1,95 @@
+version: 2
+
+models:
+  - name: slv_store
+    description: Tiendas limpias (snapshot vigente). Grano - una fila por tienda.
+    columns:
+      - name: store_id
+        data_tests: [not_null, unique]
+      - name: store_type
+        data_tests:
+          - not_null
+          - accepted_values: {values: ['a', 'b', 'c', 'd']}
+      - name: assortment
+        data_tests:
+          - not_null
+          - accepted_values: {values: ['a', 'b', 'c']}
+      - name: competition_distance_m
+        data_tests:
+          - accepted_range: {min_value: 0}
+      - name: promo2_interval_months
+        description: Meses del ciclo Promo2 ('1,4,7,10', ...). NULL si la tienda no participa.
+        data_tests:
+          - accepted_values: {values: ['1,4,7,10', '2,5,8,11', '3,6,9,12']}
+      - name: promo2_since_date
+        data_tests:
+          - accepted_range:
+              min_value: "'2009-01-01'::date"
+              max_value: "'{{ var(\"source_max_date\") }}'::date"
+    data_tests:
+      # Regla de negocio: si la tienda participa en Promo2, debe tener inicio y ciclo; si no, ninguno.
+      - expression_is_true:
+          expression: >
+            (participates_promo2 and promo2_since_date is not null and promo2_interval_months is not null)
+            or (not participates_promo2 and promo2_since_week is null and promo2_since_year is null
+                and promo2_interval_months is null)
+
+  - name: slv_sales_daily
+    description: Ventas diarias limpias. Grano - una fila por tienda y dia observado.
+    data_tests:
+      - unique_combination_of_columns:
+          combination_of_columns: [store_id, sales_date]
+    columns:
+      - name: store_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('slv_store'), field: store_id}
+      - name: sales_date
+        data_tests:
+          - not_null
+          - accepted_range:
+              min_value: "'{{ var(\"source_min_date\") }}'::date"
+              max_value: "'{{ var(\"source_max_date\") }}'::date"
+      - name: sales
+        data_tests:
+          - not_null
+          - accepted_range: {min_value: 0, max_value: 100000}
+      - name: customers
+        data_tests:
+          - not_null
+          - accepted_range: {min_value: 0, max_value: 20000}
+      - name: state_holiday_code
+        data_tests:
+          - accepted_values: {values: ['0', 'a', 'b', 'c']}
+      - name: is_dow_mismatch
+        description: TRUE si el DayOfWeek de la fuente no coincide con la fecha.
+        data_tests:
+          - accepted_values:
+              values: [false]
+              quote: false
+              config: {severity: warn}
+      - name: is_closed_with_sales
+        description: Regla de negocio - una tienda cerrada no puede vender.
+        data_tests:
+          - accepted_values:
+              values: [false]
+              quote: false
+      - name: sales_per_customer
+        description: Ticket promedio. Fuera de [1, 100] EUR se considera implausible.
+        data_tests:
+          - accepted_range:
+              min_value: 1
+              max_value: 100
+              config: {severity: warn}
+
+  - name: slv_test
+    description: Dias a pronosticar (scoring). Grano - una fila por tienda y dia.
+    data_tests:
+      - unique_combination_of_columns:
+          combination_of_columns: [store_id, sales_date]
+    columns:
+      - name: test_id
+        data_tests: [not_null, unique]
+      - name: store_id
+        data_tests:
+          - relationships: {to: ref('slv_store'), field: store_id}

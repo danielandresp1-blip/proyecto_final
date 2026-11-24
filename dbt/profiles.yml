@@ -1,0 +1,16 @@
+pset2_rossmann:
+  target: prod
+  outputs:
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      # Contenido PEM de la llave privada (run_dbt.sh lo lee de SNOWFLAKE_PRIVATE_KEY_PATH si hace falta)
+      private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+      schema: GOLD
+      threads: 4
+      query_tag: pset2_dbt
+      client_session_keep_alive: false

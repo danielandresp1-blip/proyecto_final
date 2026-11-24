@@ -1,0 +1,51 @@
+digraph star {
+  graph [rankdir=LR, fontname="Helvetica", bgcolor="white", nodesep=0.4, ranksep=0.9, pad=0.2];
+  node  [shape=plain, fontname="Helvetica", fontsize=9.5];
+  edge  [color="#5b6472", arrowhead=crow, arrowtail=tee, dir=both, arrowsize=0.8];
+
+  dim_store [label=<
+    <table border="1" cellborder="0" cellspacing="0" cellpadding="3" color="#2a9bd6">
+      <tr><td bgcolor="#2a9bd6"><font color="white"><b>DIM_STORE</b> (1 fila / tienda)</font></td></tr>
+      <tr><td align="left"><b>store_key</b> PK</td></tr>
+      <tr><td align="left">store_type, assortment(_label)</td></tr>
+      <tr><td align="left">competition_distance_m</td></tr>
+      <tr><td align="left">competition_open_since_date</td></tr>
+      <tr><td align="left">participates_promo2, promo2_since_date</td></tr>
+      <tr><td align="left">promo2_interval_months</td></tr>
+      <tr><td align="left">n_days_observed, coverage_ratio, has_data_gap</td></tr>
+    </table>>];
+
+  dim_date [label=<
+    <table border="1" cellborder="0" cellspacing="0" cellpadding="3" color="#2a9bd6">
+      <tr><td bgcolor="#2a9bd6"><font color="white"><b>DIM_DATE</b> (1 fila / dia)</font></td></tr>
+      <tr><td align="left"><b>date_key</b> PK (YYYYMMDD)</td></tr>
+      <tr><td align="left">calendar_date, year, quarter, month</td></tr>
+      <tr><td align="left">iso_week, day_of_week_iso, is_weekend</td></tr>
+      <tr><td align="left">is_month_start/end, day_index</td></tr>
+    </table>>];
+
+  dim_holiday [label=<
+    <table border="1" cellborder="0" cellspacing="0" cellpadding="3" color="#2a9bd6">
+      <tr><td bgcolor="#2a9bd6"><font color="white"><b>DIM_HOLIDAY</b> (8 filas, junk)</font></td></tr>
+      <tr><td align="left"><b>holiday_key</b> PK</td></tr>
+      <tr><td align="left">state_holiday_code / _type</td></tr>
+      <tr><td align="left">is_school_holiday, is_any_holiday</td></tr>
+    </table>>];
+
+  fct [label=<
+    <table border="1" cellborder="0" cellspacing="0" cellpadding="3" color="#d0623a">
+      <tr><td bgcolor="#d0623a"><font color="white"><b>FCT_SALES_DAILY</b></font></td></tr>
+      <tr><td bgcolor="#fdeee8" align="left"><i>Grano: tienda x dia observado</i></td></tr>
+      <tr><td align="left"><b>sales_key</b> PK (md5 store|fecha)</td></tr>
+      <tr><td align="left">store_key FK, date_key FK, holiday_key FK</td></tr>
+      <tr><td align="left">sales, customers, sales_per_customer</td></tr>
+      <tr><td align="left">is_open, is_promo, is_promo2_active</td></tr>
+      <tr><td align="left">competition_status, months_since_competition_open</td></tr>
+      <tr><td align="left">weeks_since_promo2_start</td></tr>
+      <tr><td align="left">is_open_zero_sales, is_model_eligible</td></tr>
+    </table>>];
+
+  dim_store -> fct;
+  dim_date -> fct;
+  dim_holiday -> fct;
+}

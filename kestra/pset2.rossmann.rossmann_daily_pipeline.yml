@@ -1,0 +1,55 @@
+id: rossmann_daily_pipeline
+namespace: pset2.rossmann
+description: |
+  Orquestador end-to-end diario: Ingesta Raw (dia anterior) -> dbt -> Spark OBT.
+  Corre todos los dias a las 05:00 (America/Bogota), cuando el cierre de ventas del dia anterior ya esta disponible.
+  Ejecucion manual: se puede pasar logical_date para reprocesar un dia concreto.
+
+labels:
+  project: pset2
+  layer: orchestration
+
+inputs:
+  - id: logical_date
+    type: DATE
+    required: false
+    description: Dia de ventas a cargar. Por defecto, el dia anterior a la fecha programada.
+
+variables:
+  logical_date: "{{ inputs.logical_date ?? ((trigger.date ?? execution.startDate) | dateAdd(-1, 'DAYS') | date('yyyy-MM-dd')) }}"
+
+tasks:
+  - id: ingest
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: pset2.rossmann
+    flowId: rossmann_ingest_raw
+    wait: true
+    transmitFailed: true
+    inputs:
+      start_date: "{{ render(vars.logical_date) }}"
+      end_date: "{{ render(vars.logical_date) }}"
+      refresh_source: true
+
+  - id: transform
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: pset2.rossmann
+    flowId: rossmann_transform
+    wait: true
+    transmitFailed: true
+    inputs:
+      full_refresh: false
+
+triggers:
+  - id: daily
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 5 * * *"
+    timezone: America/Bogota
+    # Si Kestra estuvo apagado, recupera solo la ultima ejecucion perdida; los huecos largos van por backfill.
+    recoverMissedSchedules: LAST
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "El pipeline diario fallo para el dia {{ render(vars.logical_date) }} (ejecucion {{ execution.id }})."
+

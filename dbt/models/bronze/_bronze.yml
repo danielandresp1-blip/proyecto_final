@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: brz_train_sales
+    description: Ventas diarias tipadas, 1:1 con RAW.TRAIN_SALES (incluye duplicados de recargas si los hubiera).
+    data_tests:
+      - row_count_equals:
+          compare_model: source('raw', 'train_sales')
+    columns:
+      - name: store_id
+        data_tests: [not_null]
+      - name: sales_date
+        description: NULL solo si la fecha de Raw no se pudo convertir.
+        data_tests: [not_null]
+      - name: _has_cast_error
+        description: TRUE si algun campo numerico o de fecha no se pudo convertir.
+        data_tests:
+          - accepted_values:
+              values: [false]
+              quote: false
+              config:
+                severity: warn
+
+  - name: brz_store
+    description: Snapshots de store.csv tipados (una fila por tienda y carga).
+    data_tests:
+      - row_count_equals:
+          compare_model: source('raw', 'store')
+    columns:
+      - name: store_id
+        data_tests: [not_null]
+
+  - name: brz_test
+    description: Snapshots de test.csv tipados.
+    columns:
+      - name: test_id
+        data_tests: [not_null]

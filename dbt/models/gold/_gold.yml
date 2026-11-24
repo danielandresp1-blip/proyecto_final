@@ -1,0 +1,69 @@
+version: 2
+
+models:
+  - name: fct_sales_daily
+    description: >
+      Hechos de ventas. GRANO: una fila por tienda y dia observado. Claves foraneas a dim_store,
+      dim_date y dim_holiday. Base del star schema y de la OBT.
+    data_tests:
+      - unique_combination_of_columns:
+          combination_of_columns: [store_key, date_key]
+      # Regla de negocio: el feriado de Navidad (c) solo puede ocurrir en diciembre
+      - expression_is_true:
+          expression: "holiday_key not in (7, 8) or mod(floor(date_key / 100), 100) = 12"
+      # Regla de negocio: tienda cerrada -> ventas y clientes en 0
+      - expression_is_true:
+          expression: "is_open or (sales = 0 and customers = 0)"
+    columns:
+      - name: sales_key
+        data_tests: [not_null, unique]
+      - name: store_key
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_store'), field: store_key}
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_date'), field: date_key}
+      - name: holiday_key
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_holiday'), field: holiday_key}
+      - name: sales
+        data_tests:
+          - not_null
+          - accepted_range: {min_value: 0}
+      - name: competition_status
+        data_tests:
+          - accepted_values: {values: ['no_info', 'unknown_since', 'open', 'not_yet_open']}
+      - name: is_promo2_active
+        data_tests: [not_null]
+
+  - name: dim_store
+    description: Atributos de tienda + cobertura de datos. Grano - una fila por tienda.
+    columns:
+      - name: store_key
+        data_tests: [not_null, unique]
+      - name: coverage_ratio
+        data_tests:
+          - accepted_range: {min_value: 0, max_value: 1}
+      - name: n_days_observed
+        description: Toda tienda del maestro debe tener ventas historicas.
+        data_tests:
+          - accepted_range:
+              min_value: 1
+              config: {severity: warn}
+
+  - name: dim_date
+    description: Calendario diario (historico + horizonte de scoring). Grano - un dia.
+    columns:
+      - name: date_key
+        data_tests: [not_null, unique]
+      - name: calendar_date
+        data_tests: [not_null, unique]
+
+  - name: dim_holiday
+    description: Dimension junk de feriado estatal x vacaciones escolares (8 filas).
+    columns:
+      - name: holiday_key
+        data_tests: [not_null, unique]

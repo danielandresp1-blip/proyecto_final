@@ -1,0 +1,198 @@
+# Proyecto final Rossmann (PSet 1 a 4)
+# Fuente -> Kestra -> Snowflake (Raw) -> dbt (Bronze/Silver/Gold) -> Spark (OBT) -> MLflow -> API -> monitoreo
+#
+# Levantar todo:            docker compose up -d --build
+# Construir dbt y Spark:    docker compose --profile jobs build   (Kestra los lanza como contenedores efimeros)
+#
+# Interfaces: Kestra http://localhost:8080 | MLflow http://localhost:5000 | Spark http://localhost:8081
+
+name: proyecto_final
+
+x-snowflake-env: &snowflake-env
+  SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+  SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+  SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE}
+  SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE}
+  SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE}
+  SNOWFLAKE_PRIVATE_KEY_PATH: /run/pset2-secrets/rsa_key.p8
+
+services:
+  # ---------- Orquestacion (PSet 2) ----------
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: kestra
+      POSTGRES_USER: kestra
+      POSTGRES_PASSWORD: ${KESTRA_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  kestra:
+    image: ${KESTRA_IMAGE:-kestra/kestra:latest}
+    # Solo para desarrollo local: root es necesario para usar el socket de Docker.
+    user: "root"
+    command: server standalone --worker-thread=16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    # Secretos de Kestra (SECRET_<NOMBRE> en base64). Se generan con scripts/encode_secrets.sh
+    env_file:
+      - .env_encoded
+    environment:
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://postgres:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: ${KESTRA_DB_PASSWORD}
+        kestra:
+          server:
+            basic-auth:
+              username: "${KESTRA_ADMIN_USER}"
+              password: "${KESTRA_ADMIN_PASSWORD}"
+          repository:
+            type: postgres
+          queue:
+            type: postgres
+          storage:
+            type: local
+            local:
+              base-path: /app/storage
+          tasks:
+            tmp-dir:
+              path: /tmp/kestra-wd/tmp
+          url: http://localhost:8080/
+        micronaut:
+          io:
+            watch:
+              enabled: true
+              paths:
+                - /app/flows
+    volumes:
+      - kestra-data:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/kestra-wd:/tmp/kestra-wd
+      - ./kestra:/app/flows
+
+  # ---------- Procesamiento (PSet 2) ----------
+  spark-master:
+    image: pset2-spark:latest
+    build:
+      context: ./spark
+      args:
+        SPARK_IMAGE: ${SPARK_IMAGE}
+        SPARK_SNOWFLAKE_PACKAGES: ${SPARK_SNOWFLAKE_PACKAGES}
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master",
+              "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
+    ports:
+      - "8081:8080"   # UI del master
+      - "7077:7077"
+
+  spark-worker:
+    image: pset2-spark:latest
+    depends_on:
+      - spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker",
+              "spark://spark-master:7077"]
+    environment:
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-3g}
+    ports:
+      - "8082:8081"   # UI del worker
+
+  # Ejecucion manual del job de Spark (Kestra hace lo mismo en el flujo rossmann_transform)
+  spark-submit:
+    image: pset2-spark:latest
+    profiles: ["jobs"]
+    user: "root"
+    depends_on:
+      - spark-master
+      - spark-worker
+    environment:
+      <<: *snowflake-env
+      SPARK_MASTER_URL: spark://spark-master:7077
+    volumes:
+      - ./secrets:/run/pset2-secrets:ro
+    command: ["/opt/spark-apps/run_obt.sh"]
+
+  # dbt Core en Docker. Ejemplo: docker compose --profile jobs run --rm dbt build
+  dbt:
+    image: pset2-dbt:latest
+    build:
+      context: ./dbt
+      args:
+        DBT_IMAGE: ${DBT_IMAGE}
+    profiles: ["jobs"]
+    environment:
+      <<: *snowflake-env
+    volumes:
+      - ./secrets:/run/pset2-secrets:ro
+    entrypoint: ["/usr/app/dbt/run_dbt.sh"]
+    command: ["build"]
+
+  # ---------- Modelo (PSet 3) ----------
+  mlflow:
+    build: ./mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+      --serve-artifacts
+      --workers 1
+      --allowed-hosts "mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    restart: unless-stopped
+
+  # ---------- Servicio y monitoreo (PSet 4) ----------
+  api:
+    build: ./api
+    depends_on:
+      - mlflow
+    environment:
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+      SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE}
+      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE}
+      SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE}
+      # Nombre propio (no SNOWFLAKE_PRIVATE_KEY_PATH): el conector 5.x lee esa variable por su cuenta
+      # y rechaza el archivo por sus permisos en Windows. La API lee la llave y la pasa en memoria.
+      LLAVE_PRIVADA_RUTA: /run/pset2-secrets/rsa_key.p8
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODELO_NOMBRE: rossmann-modelo
+      MODELO_ALIAS: champion
+      # Interruptor de respaldo (seccion 8.4): true -> la API usa la regla del gerente
+      MODO_RESPALDO: ${MODO_RESPALDO:-false}
+      REGISTRAR_PREDICCIONES: "true"
+    volumes:
+      - ./secrets:/run/pset2-secrets:ro
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # tablero:  se agrega en el paso del tablero (seccion 6.4)
+
+volumes:
+  postgres-data:
+  kestra-data:
+  # Volumen creado en el PSet 3: conserva las 107 corridas y el Model Registry (rossmann-modelo).
+  mlflow-data:
+    external: true
+    name: pset3_mlflow-data
+
+networks:
+  default:
+    # Nombre fijo: el flujo rossmann_transform conecta el contenedor de Spark a esta red (networkMode)
+    name: pset2_net

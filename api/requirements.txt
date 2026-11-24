@@ -1,0 +1,12 @@
+# Mismas versiones con las que se entreno el modelo (PSet 3): skops exige la misma version de scikit-learn
+fastapi==0.163.2
+uvicorn==0.54.0
+pydantic==2.14.3
+mlflow-skinny==3.18.0
+scikit-learn==1.9.1
+skops==0.16.0
+numpy==2.5.5
+pandas==3.1.1
+scipy==1.18.1
+pyarrow==26.0.1
+snowflake-connector-python[pandas]==5.2.0

@@ -1,0 +1,323 @@
+id: rossmann_ingest_raw
+namespace: pset2.rossmann
+description: |
+  Ingesta Rossmann Store Sales (Kaggle) -> Snowflake RAW.
+  - train.csv : carga incremental por ventana de fechas [start_date, end_date] (DELETE + INSERT, idempotente).
+  - store.csv y test.csv : snapshot completo que se ANEXA con _BATCH_ID / _LOADED_AT (Raw no se sobrescribe).
+  Todo se guarda como VARCHAR: Raw conserva los valores tal como llegan; el tipado y la limpieza los hace dbt.
+  Si refresh_source = false se reutilizan los archivos ya cargados en el stage (lo usa el backfill).
+
+labels:
+  project: pset2
+  layer: raw
+
+inputs:
+  - id: start_date
+    type: DATE
+    required: false
+    description: Inicio de la ventana de train.csv. Por defecto, el dia anterior a la fecha programada.
+  - id: end_date
+    type: DATE
+    required: false
+    description: Fin de la ventana (inclusive). Por defecto igual a start_date.
+  - id: refresh_source
+    type: BOOL
+    defaults: true
+    description: Descargar de nuevo la fuente y recargar snapshots de store/test.
+
+variables:
+  default_day: "{{ (trigger.date ?? execution.startDate) | dateAdd(-1, 'DAYS') | date('yyyy-MM-dd') }}"
+  start: "{{ inputs.start_date ?? render(vars.default_day) }}"
+  end: "{{ inputs.end_date ?? inputs.start_date ?? render(vars.default_day) }}"
+  stage: "@RAW.ROSSMANN_LANDING/current"
+  file_format: "RAW.FF_ROSSMANN_CSV"
+
+# Una sola ingesta a la vez: evita que dos ventanas hagan DELETE/INSERT concurrentes.
+concurrency:
+  limit: 1
+  behavior: QUEUE
+
+tasks:
+  - id: window
+    type: io.kestra.plugin.core.log.Log
+    message: "Ventana train.csv: {{ render(vars.start) }} -> {{ render(vars.end) }} | refresh_source={{ inputs.refresh_source }}"
+
+  - id: validate_window
+    type: io.kestra.plugin.core.execution.Fail
+    runIf: "{{ (render(vars.start) | replace({'-': ''}) | number) > (render(vars.end) | replace({'-': ''}) | number) }}"
+    errorMessage: "start_date ({{ render(vars.start) }}) es posterior a end_date ({{ render(vars.end) }})"
+
+  - id: ensure_raw_objects
+    type: io.kestra.plugin.jdbc.snowflake.Queries
+    url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+    username: "{{ secret('SNOWFLAKE_USER') }}"
+    privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    role: "{{ secret('SNOWFLAKE_ROLE') }}"
+    warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+    database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+    retry:
+      type: exponential
+      interval: PT15S
+      maxInterval: PT5M
+      maxAttempts: 4
+    description: DDL idempotente; el flujo puede correr sobre una cuenta recien creada.
+    sql: |
+      CREATE SCHEMA IF NOT EXISTS RAW;
+      CREATE FILE FORMAT IF NOT EXISTS {{ vars.file_format }}
+        TYPE = CSV SKIP_HEADER = 1 FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+        COMPRESSION = GZIP EMPTY_FIELD_AS_NULL = TRUE NULL_IF = ('');
+      CREATE STAGE IF NOT EXISTS RAW.ROSSMANN_LANDING FILE_FORMAT = {{ vars.file_format }};
+      CREATE TABLE IF NOT EXISTS RAW.TRAIN_SALES (
+        STORE VARCHAR, DAY_OF_WEEK VARCHAR, RECORD_DATE VARCHAR, SALES VARCHAR, CUSTOMERS VARCHAR,
+        OPEN_FLAG VARCHAR, PROMO VARCHAR, STATE_HOLIDAY VARCHAR, SCHOOL_HOLIDAY VARCHAR,
+        _SOURCE_FILE VARCHAR, _SOURCE_ROW NUMBER, _BATCH_ID VARCHAR, _LOADED_AT TIMESTAMP_NTZ)
+        CLUSTER BY (RECORD_DATE);
+      CREATE TABLE IF NOT EXISTS RAW.STORE (
+        STORE VARCHAR, STORE_TYPE VARCHAR, ASSORTMENT VARCHAR, COMPETITION_DISTANCE VARCHAR,
+        COMPETITION_OPEN_SINCE_MONTH VARCHAR, COMPETITION_OPEN_SINCE_YEAR VARCHAR, PROMO2 VARCHAR,
+        PROMO2_SINCE_WEEK VARCHAR, PROMO2_SINCE_YEAR VARCHAR, PROMO_INTERVAL VARCHAR,
+        _SOURCE_FILE VARCHAR, _SOURCE_ROW NUMBER, _BATCH_ID VARCHAR, _LOADED_AT TIMESTAMP_NTZ);
+      CREATE TABLE IF NOT EXISTS RAW.TEST (
+        ID VARCHAR, STORE VARCHAR, DAY_OF_WEEK VARCHAR, RECORD_DATE VARCHAR, OPEN_FLAG VARCHAR,
+        PROMO VARCHAR, STATE_HOLIDAY VARCHAR, SCHOOL_HOLIDAY VARCHAR,
+        _SOURCE_FILE VARCHAR, _SOURCE_ROW NUMBER, _BATCH_ID VARCHAR, _LOADED_AT TIMESTAMP_NTZ);
+      CREATE TABLE IF NOT EXISTS RAW.INGESTION_LOG (
+        BATCH_ID VARCHAR, FLOW_ID VARCHAR, WINDOW_START DATE, WINDOW_END DATE, REFRESH_SOURCE BOOLEAN,
+        ROWS_TRAIN NUMBER, ROWS_STORE NUMBER, ROWS_TEST NUMBER, STATUS VARCHAR, MESSAGE VARCHAR,
+        LOGGED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP());
+
+  - id: refresh
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ inputs.refresh_source }}"
+    then:
+      - id: download_source
+        type: io.kestra.plugin.scripts.python.Script
+        description: Descarga la competencia desde la API de Kaggle, valida el esquema y comprime cada CSV.
+        containerImage: python:3.12-slim
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+        beforeCommands:
+          - pip install --quiet "kaggle>=1.6,<2" six
+        env:
+          KAGGLE_USERNAME: "{{ secret('KAGGLE_USERNAME') }}"
+          KAGGLE_KEY: "{{ secret('KAGGLE_KEY') }}"
+        timeout: PT20M
+        retry:
+          type: exponential
+          interval: PT30S
+          maxInterval: PT10M
+          maxAttempts: 5
+          maxDuration: PT1H
+          warningOnRetry: true
+        outputFiles:
+          - "*.csv.gz"
+        script: |
+          import csv, gzip, json, shutil, subprocess, sys, zipfile
+
+          EXPECTED = {
+              "train.csv": ["Store", "DayOfWeek", "Date", "Sales", "Customers", "Open",
+                            "Promo", "StateHoliday", "SchoolHoliday"],
+              "store.csv": ["Store", "StoreType", "Assortment", "CompetitionDistance",
+                            "CompetitionOpenSinceMonth", "CompetitionOpenSinceYear", "Promo2",
+                            "Promo2SinceWeek", "Promo2SinceYear", "PromoInterval"],
+              "test.csv":  ["Id", "Store", "DayOfWeek", "Date", "Open", "Promo",
+                            "StateHoliday", "SchoolHoliday"],
+          }
+
+          subprocess.run(["kaggle", "competitions", "download", "-c", "rossmann-store-sales",
+                          "-p", "."], check=True)
+          with zipfile.ZipFile("rossmann-store-sales.zip") as z:
+              z.extractall(".")
+
+          counts = {}
+          for name, cols in EXPECTED.items():
+              with open(name, newline="") as f:
+                  reader = csv.reader(f)
+                  header = next(reader)
+                  if header != cols:
+                      # Falla explicita ante cambios de esquema: no tiene sentido reintentar.
+                      sys.exit(f"Cambio de esquema en {name}: esperado {cols}, recibido {header}")
+                  counts[name.split(".")[0]] = sum(1 for _ in reader)
+              with open(name, "rb") as fi, gzip.open(name + ".gz", "wb") as fo:
+                  shutil.copyfileobj(fi, fo)
+
+          print("::" + json.dumps({"outputs": {"source_rows": counts}}) + "::")
+
+      - id: upload_train
+        type: io.kestra.plugin.jdbc.snowflake.Upload
+        url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+        username: "{{ secret('SNOWFLAKE_USER') }}"
+        privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+        role: "{{ secret('SNOWFLAKE_ROLE') }}"
+        warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+        database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+        retry:
+          type: exponential
+          interval: PT15S
+          maxInterval: PT5M
+          maxAttempts: 4
+        from: "{{ outputs.download_source.outputFiles['train.csv.gz'] }}"
+        stageName: "@{{ secret('SNOWFLAKE_DATABASE') }}.RAW.ROSSMANN_LANDING"
+        prefix: current
+        fileName: train.csv.gz
+        compress: false
+
+      - id: upload_store
+        type: io.kestra.plugin.jdbc.snowflake.Upload
+        url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+        username: "{{ secret('SNOWFLAKE_USER') }}"
+        privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+        role: "{{ secret('SNOWFLAKE_ROLE') }}"
+        warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+        database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+        retry:
+          type: exponential
+          interval: PT15S
+          maxInterval: PT5M
+          maxAttempts: 4
+        from: "{{ outputs.download_source.outputFiles['store.csv.gz'] }}"
+        stageName: "@{{ secret('SNOWFLAKE_DATABASE') }}.RAW.ROSSMANN_LANDING"
+        prefix: current
+        fileName: store.csv.gz
+        compress: false
+
+      - id: upload_test
+        type: io.kestra.plugin.jdbc.snowflake.Upload
+        url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+        username: "{{ secret('SNOWFLAKE_USER') }}"
+        privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+        role: "{{ secret('SNOWFLAKE_ROLE') }}"
+        warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+        database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+        retry:
+          type: exponential
+          interval: PT15S
+          maxInterval: PT5M
+          maxAttempts: 4
+        from: "{{ outputs.download_source.outputFiles['test.csv.gz'] }}"
+        stageName: "@{{ secret('SNOWFLAKE_DATABASE') }}.RAW.ROSSMANN_LANDING"
+        prefix: current
+        fileName: test.csv.gz
+        compress: false
+
+  - id: load_raw
+    type: io.kestra.plugin.jdbc.snowflake.Queries
+    url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+    username: "{{ secret('SNOWFLAKE_USER') }}"
+    privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    role: "{{ secret('SNOWFLAKE_ROLE') }}"
+    warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+    database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+    retry:
+      type: exponential
+      interval: PT15S
+      maxInterval: PT5M
+      maxAttempts: 4
+    description: Una transaccion. Si algo falla no queda una ventana a medio cargar.
+    transaction: true
+    sql: |
+      DELETE FROM RAW.TRAIN_SALES
+       WHERE RECORD_DATE BETWEEN '{{ render(vars.start) }}' AND '{{ render(vars.end) }}';
+
+      INSERT INTO RAW.TRAIN_SALES
+      SELECT t.$1, t.$2, t.$3, t.$4, t.$5, t.$6, t.$7, t.$8, t.$9,
+             METADATA$FILENAME, METADATA$FILE_ROW_NUMBER, '{{ execution.id }}', CURRENT_TIMESTAMP()
+        FROM {{ vars.stage }}/train.csv.gz (FILE_FORMAT => '{{ vars.file_format }}') t
+       WHERE t.$3 BETWEEN '{{ render(vars.start) }}' AND '{{ render(vars.end) }}';
+      {% if inputs.refresh_source %}
+
+      INSERT INTO RAW.STORE
+      SELECT t.$1, t.$2, t.$3, t.$4, t.$5, t.$6, t.$7, t.$8, t.$9, t.$10,
+             METADATA$FILENAME, METADATA$FILE_ROW_NUMBER, '{{ execution.id }}', CURRENT_TIMESTAMP()
+        FROM {{ vars.stage }}/store.csv.gz (FILE_FORMAT => '{{ vars.file_format }}') t;
+
+      INSERT INTO RAW.TEST
+      SELECT t.$1, t.$2, t.$3, t.$4, t.$5, t.$6, t.$7, t.$8,
+             METADATA$FILENAME, METADATA$FILE_ROW_NUMBER, '{{ execution.id }}', CURRENT_TIMESTAMP()
+        FROM {{ vars.stage }}/test.csv.gz (FILE_FORMAT => '{{ vars.file_format }}') t;
+      {% endif %}
+
+  - id: audit
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+    username: "{{ secret('SNOWFLAKE_USER') }}"
+    privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    role: "{{ secret('SNOWFLAKE_ROLE') }}"
+    warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+    database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+    retry:
+      type: exponential
+      interval: PT15S
+      maxInterval: PT5M
+      maxAttempts: 4
+    fetchType: FETCH_ONE
+    sql: |
+      SELECT
+        (SELECT COUNT(*) FROM RAW.TRAIN_SALES WHERE _BATCH_ID = '{{ execution.id }}') AS ROWS_TRAIN,
+        (SELECT COUNT(DISTINCT STORE) FROM RAW.TRAIN_SALES WHERE _BATCH_ID = '{{ execution.id }}') AS STORES_TRAIN,
+        (SELECT COUNT(*) FROM RAW.STORE WHERE _BATCH_ID = '{{ execution.id }}') AS ROWS_STORE,
+        (SELECT COUNT(*) FROM RAW.TEST  WHERE _BATCH_ID = '{{ execution.id }}') AS ROWS_TEST
+
+  - id: log_success
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+    username: "{{ secret('SNOWFLAKE_USER') }}"
+    privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    role: "{{ secret('SNOWFLAKE_ROLE') }}"
+    warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+    database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+    retry:
+      type: exponential
+      interval: PT15S
+      maxInterval: PT5M
+      maxAttempts: 4
+    sql: |
+      INSERT INTO RAW.INGESTION_LOG (BATCH_ID, FLOW_ID, WINDOW_START, WINDOW_END, REFRESH_SOURCE,
+                                     ROWS_TRAIN, ROWS_STORE, ROWS_TEST, STATUS, MESSAGE)
+      VALUES ('{{ execution.id }}', '{{ flow.id }}', '{{ render(vars.start) }}', '{{ render(vars.end) }}',
+              {{ inputs.refresh_source }}, {{ outputs.audit.row.ROWS_TRAIN }}, {{ outputs.audit.row.ROWS_STORE }},
+              {{ outputs.audit.row.ROWS_TEST }}, 'SUCCESS',
+              '{{ outputs.audit.row.STORES_TRAIN }} tiendas en la ventana')
+
+  - id: empty_window_warning
+    type: io.kestra.plugin.core.log.Log
+    runIf: "{{ outputs.audit.row.ROWS_TRAIN == 0 }}"
+    level: WARN
+    message: |
+      La ventana {{ render(vars.start) }} -> {{ render(vars.end) }} no tiene filas en la fuente.
+      Esperado en ejecuciones diarias posteriores a 2015-07-31 (la fuente de Kaggle es historica).
+
+outputs:
+  - id: rows_train
+    type: INT
+    value: "{{ outputs.audit.row.ROWS_TRAIN }}"
+  - id: window_start
+    type: STRING
+    value: "{{ render(vars.start) }}"
+  - id: window_end
+    type: STRING
+    value: "{{ render(vars.end) }}"
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "Fallo la ingesta {{ execution.id }} (ventana {{ render(vars.start) }} -> {{ render(vars.end) }})."
+  - id: record_failure
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+    username: "{{ secret('SNOWFLAKE_USER') }}"
+    privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    role: "{{ secret('SNOWFLAKE_ROLE') }}"
+    warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+    database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+    allowFailure: true
+    retry:
+      type: constant
+      interval: PT10S
+      maxAttempts: 2
+    sql: |
+      INSERT INTO RAW.INGESTION_LOG (BATCH_ID, FLOW_ID, WINDOW_START, WINDOW_END, REFRESH_SOURCE, STATUS, MESSAGE)
+      VALUES ('{{ execution.id }}', '{{ flow.id }}', '{{ render(vars.start) }}', '{{ render(vars.end) }}',
+              {{ inputs.refresh_source }}, 'FAILED', 'Ver logs de la ejecucion en Kestra')
+

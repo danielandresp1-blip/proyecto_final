@@ -1,0 +1,87 @@
+id: rossmann_transform
+namespace: pset2.rossmann
+description: |
+  Transformaciones aguas abajo de Raw:
+  1) dbt build  -> BRONZE, SILVER, GOLD (+ tests). Si un test con severidad error falla, Spark no corre.
+  2) Spark      -> OBT.OBT_SALES_DAILY a partir de GOLD, con validacion de joins.
+  Usa las imagenes locales pset2-dbt:latest y pset2-spark:latest (docker compose --profile jobs build).
+
+labels:
+  project: pset2
+  layer: transform
+
+inputs:
+  - id: full_refresh
+    type: BOOL
+    defaults: false
+    description: Reconstruye los modelos incrementales de dbt desde cero.
+
+concurrency:
+  limit: 1
+  behavior: QUEUE
+
+tasks:
+  - id: dbt_build
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: pset2-dbt:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+    env:
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+      SNOWFLAKE_PRIVATE_KEY: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    timeout: PT45M
+    retry:
+      # Reintento corto solo para fallas transitorias (red, warehouse). Un test fallido vuelve a fallar igual.
+      type: constant
+      interval: PT1M
+      maxAttempts: 2
+    outputFiles:
+      - "run_results.json"
+      - "manifest.json"
+    commands:
+      - |
+        set +e
+        /usr/app/dbt/run_dbt.sh build {{ inputs.full_refresh ? '--full-refresh' : '' }}
+        status=$?
+        cp /usr/app/dbt/target/run_results.json /usr/app/dbt/target/manifest.json . 2>/dev/null
+        exit $status
+
+  - id: spark_obt
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: pset2-spark:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+      # Misma red que spark-master/spark-worker para que el driver (este contenedor) y los executors se vean
+      networkMode: pset2_net
+    env:
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+      SNOWFLAKE_PRIVATE_KEY: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+      OBT_RUN_ID: "{{ execution.id }}"
+    timeout: PT45M
+    retry:
+      type: constant
+      interval: PT2M
+      maxAttempts: 2
+    commands:
+      - /opt/spark-apps/run_obt.sh
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: |
+      Fallo la transformacion {{ execution.id }}.
+      Revisar run_results.json (dbt) o el log de Spark. La OBT anterior queda intacta: Spark solo escribe
+      si todas las validaciones pasan.
+

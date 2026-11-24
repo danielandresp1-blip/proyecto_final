@@ -1,0 +1,56 @@
+id: rossmann_backfill
+namespace: pset2.rossmann
+description: |
+  Backfill historico: carga en RAW todo el rango de fechas indicado (por defecto, toda la historia
+  2013-01-01 a 2015-07-31) en una sola ejecucion de la ingesta, y luego reconstruye dbt y la OBT.
+  La ingesta es idempotente (DELETE + INSERT del rango en una transaccion): relanzar el backfill
+  no duplica filas. Para huecos de pocos dias tambien sirve el backfill nativo del trigger de
+  rossmann_daily_pipeline (UI o API).
+
+labels:
+  project: pset2
+  layer: raw
+
+inputs:
+  - id: start_date
+    type: DATE
+    defaults: "2013-01-01"
+  - id: end_date
+    type: DATE
+    defaults: "2015-07-31"
+  - id: run_transformations
+    type: BOOL
+    defaults: true
+
+concurrency:
+  limit: 1
+  behavior: FAIL
+
+tasks:
+  - id: ingest_history
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: pset2.rossmann
+    flowId: rossmann_ingest_raw
+    wait: true
+    transmitFailed: true
+    inputs:
+      start_date: "{{ inputs.start_date }}"
+      end_date: "{{ inputs.end_date }}"
+      refresh_source: true
+
+  - id: rebuild_downstream
+    type: io.kestra.plugin.core.flow.Subflow
+    runIf: "{{ inputs.run_transformations }}"
+    namespace: pset2.rossmann
+    flowId: rossmann_transform
+    wait: true
+    transmitFailed: true
+    inputs:
+      full_refresh: true
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "El backfill {{ execution.id }} fallo. Se puede relanzar sin riesgo de duplicar filas."
+

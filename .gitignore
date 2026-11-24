@@ -1,0 +1,28 @@
+# Credenciales (nunca al repositorio)
+.env
+.env_encoded
+secrets/*
+!secrets/.gitkeep
+*.p8
+*.pem
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+mlruns/
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
+
+# Varios
+.DS_Store
+.vscode/
+data/
+
+# Copias que Kestra escribe automaticamente
+kestra/main_*

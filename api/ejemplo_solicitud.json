@@ -1,0 +1,31 @@
+{
+  "lote": "prueba_manual",
+  "registros": [
+    {
+      "store_id": 1,
+      "fecha": "2015-07-31",
+      "sales_mean_lag42_28d": 4500.0,
+      "sales_mean_lag42_dow": 4300.0,
+      "day_of_month": 31,
+      "weeks_since_promo2_start": null,
+      "months_since_competition_open": 82,
+      "competition_distance_m": 1270,
+      "is_promo": true,
+      "is_promo2_active": false,
+      "participates_promo2": false,
+      "is_school_holiday": true,
+      "is_state_holiday": false,
+      "was_open_prev_day": true,
+      "is_open_next_day": true,
+      "was_promo_prev_day": true,
+      "is_state_holiday_prev_day": false,
+      "is_state_holiday_next_day": false,
+      "store_type": "c",
+      "assortment": "a",
+      "state_holiday_type": "none",
+      "competition_status": "open",
+      "day_of_week_iso": 5,
+      "month": 7
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: dq_metrics
+    description: >
+      Metricas de calidad (completitud, validez, consistencia, precision, unicidad) calculadas en cada
+      dbt build sobre Raw, Bronze y Silver. Evidencia cuantitativa de las decisiones de limpieza.
+    columns:
+      - name: metric
+        data_tests: [not_null, unique]
+      - name: pct
+        data_tests:
+          - accepted_range: {min_value: 0, max_value: 100}

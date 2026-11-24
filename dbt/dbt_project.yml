@@ -1,0 +1,49 @@
+name: pset2_rossmann
+version: "1.0.0"
+config-version: 2
+profile: pset2_rossmann
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Rango esperado de la fuente historica (se usa en tests de validez)
+  source_min_date: "2013-01-01"
+  source_max_date: "2015-07-31"
+  scoring_max_date: "2015-09-17"
+  # Minimo de tiendas que deben reportar por dia (1.115 - 180 tiendas con hueco 2014-S2 = 935)
+  min_stores_per_day: 935
+  # Ano minimo plausible de apertura de competencia; antes se considera centinela invalido
+  min_competition_year: 1950
+  # Dias hacia atras que reprocesa el incremental (cubre recargas tardias de Raw)
+  incremental_lookback_days: 3
+
+models:
+  pset2_rossmann:
+    +persist_docs:
+      relation: true
+      columns: true
+    bronze:
+      +schema: BRONZE
+      +materialized: view
+      +tags: ["bronze"]
+    silver:
+      +schema: SILVER
+      +materialized: table
+      +tags: ["silver"]
+    gold:
+      +schema: GOLD
+      +materialized: table
+      +tags: ["gold"]
+    audit:
+      +schema: SILVER
+      +materialized: table
+      +tags: ["audit"]
+
+data_tests:
+  pset2_rossmann:
+    +store_failures: false

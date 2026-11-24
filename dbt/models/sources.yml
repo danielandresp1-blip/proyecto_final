@@ -1,0 +1,39 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Datos originales de Rossmann cargados por Kestra (todo VARCHAR + metadatos de carga).
+    database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+    schema: RAW
+    loaded_at_field: _LOADED_AT
+    freshness:
+      warn_after: {count: 36, period: hour}
+      error_after: {count: 72, period: hour}
+    tables:
+      - name: train_sales
+        identifier: TRAIN_SALES
+        description: train.csv - ventas diarias por tienda (2013-01-01 a 2015-07-31). Cargado por ventanas de fecha.
+        columns:
+          - name: STORE
+            data_tests: [not_null]
+          - name: RECORD_DATE
+            data_tests: [not_null]
+          - name: _BATCH_ID
+            data_tests: [not_null]
+
+      - name: store
+        identifier: STORE
+        description: store.csv - atributos de tienda. Cada ejecucion con refresh_source anexa un snapshot completo.
+        columns:
+          - name: STORE
+            data_tests: [not_null]
+
+      - name: test
+        identifier: TEST
+        description: test.csv - dias a pronosticar (2015-08-01 a 2015-09-17), sin ventas. Snapshots anexados.
+        freshness: null
+
+      - name: ingestion_log
+        identifier: INGESTION_LOG
+        description: Bitacora de ejecuciones de Kestra (ventana, filas cargadas, estado).
+        freshness: null
