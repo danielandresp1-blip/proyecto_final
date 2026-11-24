@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: api/requirements.txt
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r api/requirements.txt
+          pip install pytest httpx
+
+      - name: Construir la imagen de la API
+        run: docker build -t rossmann-api:ci ./api
+
+      - name: Ejecutar pytest
+        run: pytest tests -v

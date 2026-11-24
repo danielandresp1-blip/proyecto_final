@@ -26,3 +26,6 @@ data/
 
 # Copias que Kestra escribe automaticamente
 kestra/main_*
+
+# Pruebas
+.pytest_cache/
