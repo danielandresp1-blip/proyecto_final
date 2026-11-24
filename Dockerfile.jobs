@@ -1,0 +1,11 @@
+# Imagen de los procesos que lanza Kestra: simulacion, monitoreo y reentrenamiento.
+# Mismas versiones de librerias que la API y que el entrenamiento del PSet 3.
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY api/requirements.txt requirements-api.txt
+RUN pip install --no-cache-dir -r requirements-api.txt python-dotenv==1.2.4 requests==2.34.2
+
+COPY src/ src/
+COPY monitoreo/ monitoreo/
+ENV PYTHONPATH=/app

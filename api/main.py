@@ -175,6 +175,41 @@ async def entrada_invalida(_request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={"error": "entrada invalida", "campos": campos})
 
 
+# ---------------------------------------------------------------- metricas de sistema (seccion 6.1)
+solicitudes: list[tuple[int, float]] = []  # (codigo HTTP, latencia en ms) de cada llamada a /predecir
+
+
+@app.middleware("http")
+async def medir(request: Request, call_next):
+    inicio = time.perf_counter()
+    codigo = 500
+    try:
+        respuesta = await call_next(request)
+        codigo = respuesta.status_code
+        return respuesta
+    finally:
+        if request.url.path == "/predecir":
+            solicitudes.append((codigo, (time.perf_counter() - inicio) * 1000))
+
+
+@app.get("/metricas")
+def metricas(reiniciar: bool = False):
+    """Latencia p50/p95, tasa de errores 4xx/5xx y volumen de /predecir desde la ultima lectura."""
+    codigos = np.array([c for c, _ in solicitudes])
+    latencias = np.array([l for _, l in solicitudes])
+    n = len(codigos)
+    resumen = {
+        "solicitudes": n,
+        "latencia_p50_ms": float(np.percentile(latencias, 50)) if n else None,
+        "latencia_p95_ms": float(np.percentile(latencias, 95)) if n else None,
+        "tasa_4xx": float(((codigos >= 400) & (codigos < 500)).mean()) if n else 0.0,
+        "tasa_5xx": float((codigos >= 500).mean()) if n else 0.0,
+    }
+    if reiniciar:
+        solicitudes.clear()
+    return resumen
+
+
 @app.get("/salud")
 def salud():
     return {

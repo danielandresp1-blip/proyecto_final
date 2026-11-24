@@ -1,0 +1,61 @@
+id: monitoreo
+namespace: proyecto.rossmann
+description: |
+  Monitoreo de un paso de la simulacion (seccion 6). Lo llama produccion_lotes en dos partes:
+  - desempeno: llegaron las ventas reales del lote N-1. WAPE y costo de turnos del modelo y de la regla,
+    diagnostico del tipo de deriva y disparador del reentrenamiento (seccion 7.1).
+  - lote: el lote N ya se pronostico. Sistema, predicciones, calidad de datos y deriva (PSI, KS, chi2).
+  Guarda OPERACION.MONITOREO y OPERACION.ALERTAS. Las alertas se avisan en este log.
+
+labels:
+  project: proyecto_final
+  etapa: monitoreo
+
+inputs:
+  - id: paso
+    type: INT
+    description: Paso de la simulacion (1 a 9)
+  - id: parte
+    type: SELECT
+    values: [desempeno, lote]
+
+tasks:
+  - id: monitorear
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: proyecto-jobs:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+      networkMode: pset2_net
+    env:
+      API_URL: http://api:8000
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+      LLAVE_PRIVADA_PEM: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    commands:
+      - python -m monitoreo.monitorear --paso {{ inputs.paso }} --parte {{ inputs.parte }}
+
+  - id: avisar_alertas
+    type: io.kestra.plugin.core.log.Log
+    runIf: "{{ outputs.monitorear.vars.alertas > 0 }}"
+    level: WARN
+    message: >-
+      Paso {{ inputs.paso }} ({{ inputs.parte }}): {{ outputs.monitorear.vars.alertas }} alertas.
+      Detalle en el log de la tarea monitorear y en OPERACION.ALERTAS.
+
+outputs:
+  - id: alertas
+    type: INT
+    value: "{{ outputs.monitorear.vars.alertas }}"
+  - id: reentrenar
+    type: BOOL
+    value: "{{ outputs.monitorear.vars.reentrenar }}"
+  - id: motivo
+    type: STRING
+    value: "{{ outputs.monitorear.vars.motivo }}"
+  - id: lote_eval
+    type: INT
+    value: "{{ outputs.monitorear.vars.lote_eval }}"

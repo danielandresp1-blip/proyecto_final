@@ -1,5 +1,6 @@
 """Preparación de datos, preprocesamiento, métricas, validación y registro del PSet 3."""
 import hashlib
+import os
 import subprocess
 import time
 
@@ -113,7 +114,8 @@ def pliegues_temporales(entrenamiento: pd.DataFrame) -> list:
     return pliegues
 
 
-TRACKING_URI = "http://localhost:5000"
+# En los contenedores de Kestra MLflow se llama "mlflow"; en tu equipo, localhost.
+TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 EXPERIMENTO = "rossmann"
 TABLA_ORIGEN = "PSET2_ROSSMANN.OBT.OBT_SALES_DAILY"
 SEMILLA = 42

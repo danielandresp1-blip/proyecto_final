@@ -138,6 +138,14 @@ services:
     entrypoint: ["/usr/app/dbt/run_dbt.sh"]
     command: ["build"]
 
+  # Imagen de los procesos que lanza Kestra (simulacion, monitoreo, reentrenamiento): src/ + monitoreo/
+  jobs:
+    image: proyecto-jobs:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.jobs
+    profiles: ["jobs"]
+
   # ---------- Modelo (PSet 3) ----------
   mlflow:
     build: ./mlflow

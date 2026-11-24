@@ -12,15 +12,32 @@ load_dotenv(RAIZ / ".env")
 TABLA_OBT = "PSET2_ROSSMANN.OBT.OBT_SALES_DAILY"
 
 
-def conectar():
+def _llave_privada() -> dict:
+    """En tu equipo se usa secrets/rsa_key.p8. En los contenedores que lanza Kestra la llave llega
+    como texto PEM en LLAVE_PRIVADA_PEM (secreto de Kestra) y se pasa en memoria."""
+    pem = os.getenv("LLAVE_PRIVADA_PEM")
+    if not pem:
+        return {"private_key_file": str(RAIZ / "secrets" / "rsa_key.p8")}
+    from cryptography.hazmat.primitives import serialization
+
+    llave = serialization.load_pem_private_key(pem.encode(), password=None)
+    return {"private_key": llave.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )}
+
+
+def conectar(schema: str | None = None):
     return snowflake.connector.connect(
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         user=os.environ["SNOWFLAKE_USER"],
         role=os.environ["SNOWFLAKE_ROLE"],
         warehouse=os.environ["SNOWFLAKE_WAREHOUSE"],
         database=os.environ["SNOWFLAKE_DATABASE"],
-        private_key_file=str(RAIZ / "secrets" / "rsa_key.p8"),
+        schema=schema,
         enable_server_session_keep_alive_auto_detection=False,
+        **_llave_privada(),
     )
 
 

@@ -1,0 +1,89 @@
+id: reentrenamiento
+namespace: proyecto.rossmann
+description: |
+  Reentrenamiento con aprobacion humana (seccion 7.2). Lo dispara produccion_lotes cuando el monitoreo
+  detecta caida de desempeno (WAPE > umbral en 2 lotes seguidos) o por calendario (cada 4 lotes).
+  1. Reentrena con la preparacion de src/pipeline.py y los hiperparametros del champion (sin tuning),
+     con el historico y los lotes etiquetados (mas peso a los recientes).
+  2. Registra la corrida en MLflow (fase=reentrenamiento, motivo) y la version nueva como 'challenger'.
+  3. Compara champion y challenger en el lote etiquetado mas reciente, que ninguno vio al entrenar.
+  4. Aplica la regla de promocion y se PAUSA hasta que una persona apruebe o rechace.
+  5. Si se aprueba, 'champion' pasa al modelo nuevo y la API lo carga sin reconstruir la imagen.
+
+labels:
+  project: proyecto_final
+  etapa: reentrenamiento
+
+inputs:
+  - id: lote_eval
+    type: INT
+    description: Lote etiquetado mas reciente; se usa para comparar y no para entrenar
+  - id: motivo
+    type: STRING
+    defaults: Ejecucion manual
+
+concurrency:
+  limit: 1
+  behavior: QUEUE
+
+tasks:
+  - id: entrenar
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: proyecto-jobs:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+      networkMode: pset2_net
+    env:
+      MOTIVO: "{{ inputs.motivo }}"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+      LLAVE_PRIVADA_PEM: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    timeout: PT40M
+    commands:
+      - python -m src.reentrenar entrenar --lote-eval {{ inputs.lote_eval }}
+
+  - id: comparacion
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      Motivo: {{ inputs.motivo }}
+      Lote de evaluacion: {{ inputs.lote_eval }}
+      Champion   v{{ outputs.entrenar.vars.champion_previo }}: WAPE {{ outputs.entrenar.vars.wape_champion }} | costo de turnos {{ outputs.entrenar.vars.costo_champion }}
+      Challenger v{{ outputs.entrenar.vars.version }}: WAPE {{ outputs.entrenar.vars.wape_challenger }} | costo de turnos {{ outputs.entrenar.vars.costo_challenger }}
+      Mejora de costo: {{ outputs.entrenar.vars.mejora_costo }} (umbral 0.0039)
+      Regla de promocion: {{ outputs.entrenar.vars.cumple_regla ? 'el challenger CUMPLE -> se recomienda aprobar' : 'el challenger NO CUMPLE -> se recomienda rechazar' }}
+      Esperando aprobacion humana: abrir esta ejecucion y presionar Resume.
+
+  - id: aprobacion
+    type: io.kestra.plugin.core.flow.Pause
+    onResume:
+      - id: aprobar
+        type: BOOL
+        defaults: false
+        description: ¿El challenger reemplaza al champion?
+      - id: motivo
+        type: STRING
+        description: Motivo de la decision (queda registrado en MLflow)
+
+  - id: decidir
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: proyecto-jobs:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+      networkMode: pset2_net
+    env:
+      MOTIVO: "{{ outputs.aprobacion.onResume.motivo }}"
+      API_URL: http://api:8000
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    commands:
+      - python -m src.reentrenar decidir --version {{ outputs.entrenar.vars.version }} --aprobar {{ outputs.aprobacion.onResume.aprobar }}
+
+outputs:
+  - id: decision
+    type: STRING
+    value: "{{ outputs.decidir.vars.decision }}"

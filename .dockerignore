@@ -1,0 +1,16 @@
+# Nunca entran a una imagen
+.env
+.env_encoded
+secrets/
+.git/
+.venv/
+**/__pycache__/
+.pytest_cache/
+
+# No los necesitan las imagenes que se construyen desde la raiz
+notebooks/
+docs/
+tests/
+dbt/
+spark/
+kestra/

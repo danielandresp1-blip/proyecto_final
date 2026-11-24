@@ -1,0 +1,112 @@
+id: produccion_lotes
+namespace: proyecto.rossmann
+description: |
+  Simulacion de produccion (seccion 5). Ejecutar con lote = 1, 2, ..., 9, en orden.
+  En el paso N:
+    1. Llegan las ventas reales del lote N-1 (su periodo ya termino) a VENTAS_REALES.
+    2. Monitoreo de desempeno del lote N-1 y disparador del reentrenamiento.
+    3. Si corresponde, reentrenamiento con aprobacion humana (el flujo espera la decision).
+    4. Se pronostica el lote N llamando a la API, que registra cada prediccion en PREDICCIONES.
+    5. Monitoreo del lote N: sistema, predicciones, calidad de datos y deriva.
+  El paso 9 solo trae las ventas reales del lote 8 y lo evalua.
+  Usa la imagen local proyecto-jobs:latest (docker compose --profile jobs build jobs).
+
+labels:
+  project: proyecto_final
+  etapa: simulacion
+
+inputs:
+  - id: lote
+    type: INT
+    defaults: 1
+    description: Paso de la simulacion (1 a 9)
+
+concurrency:
+  limit: 1
+  behavior: QUEUE
+
+tasks:
+  - id: validar_lote
+    type: io.kestra.plugin.core.execution.Fail
+    runIf: "{{ inputs.lote < 1 or inputs.lote > 9 }}"
+    errorMessage: "El lote debe estar entre 1 y 9 (9 solo trae las ventas reales del lote 8)"
+
+  - id: llegan_ventas_reales
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.lote >= 2 }}"
+    containerImage: proyecto-jobs:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+      networkMode: pset2_net
+    env:
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+      LLAVE_PRIVADA_PEM: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    commands:
+      - python -m src.simulacion etiquetar --lote {{ inputs.lote - 1 }}
+
+  - id: monitorear_desempeno
+    type: io.kestra.plugin.core.flow.Subflow
+    runIf: "{{ inputs.lote >= 2 }}"
+    namespace: proyecto.rossmann
+    flowId: monitoreo
+    inputs:
+      paso: "{{ inputs.lote }}"
+      parte: desempeno
+    wait: true
+    transmitFailed: true
+
+  - id: reentrenar
+    type: io.kestra.plugin.core.flow.Subflow
+    runIf: "{{ inputs.lote >= 2 and (outputs.monitorear_desempeno.outputs.reentrenar ?? false) }}"
+    namespace: proyecto.rossmann
+    flowId: reentrenamiento
+    inputs:
+      lote_eval: "{{ outputs.monitorear_desempeno.outputs.lote_eval }}"
+      motivo: "{{ outputs.monitorear_desempeno.outputs.motivo }}"
+    wait: true
+    transmitFailed: true
+
+  - id: pronosticar
+    type: io.kestra.plugin.scripts.shell.Commands
+    runIf: "{{ inputs.lote <= 8 }}"
+    containerImage: proyecto-jobs:latest
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+      networkMode: pset2_net  # para llegar a la API (api:8000)
+    env:
+      API_URL: http://api:8000
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+      LLAVE_PRIVADA_PEM: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    retry:
+      type: constant
+      interval: PT30S
+      maxAttempts: 2
+    commands:
+      - python -m src.simulacion puntuar --lote {{ inputs.lote }}
+
+  - id: monitorear_lote
+    type: io.kestra.plugin.core.flow.Subflow
+    runIf: "{{ inputs.lote <= 8 }}"
+    namespace: proyecto.rossmann
+    flowId: monitoreo
+    inputs:
+      paso: "{{ inputs.lote }}"
+      parte: lote
+    wait: true
+    transmitFailed: true
+
+errors:
+  - id: registrar_fallo
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "Fallo el paso {{ inputs.lote }} de la simulacion ({{ execution.id }})"
