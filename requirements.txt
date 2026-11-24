@@ -9,3 +9,8 @@ jupyter
 scikit-learn
 mlflow==3.18.0
 chronos-forecasting>=2.0
+
+# Pruebas y scripts del PSet 4
+pytest
+httpx
+requests

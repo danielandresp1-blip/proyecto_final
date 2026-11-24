@@ -193,7 +193,26 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
-  # tablero:  se agrega en el paso del tablero (seccion 6.4)
+  # Tablero de monitoreo (seccion 6.4): http://localhost:8501
+  tablero:
+    build:
+      context: .
+      dockerfile: tablero/Dockerfile
+    depends_on:
+      - api
+    environment:
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+      SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE}
+      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE}
+      SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE}
+      LLAVE_PRIVADA_RUTA: /run/pset2-secrets/rsa_key.p8
+      API_URL: http://api:8000
+    volumes:
+      - ./secrets:/run/pset2-secrets:ro
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
 
 volumes:
   postgres-data:

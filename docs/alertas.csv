@@ -1,0 +1,13 @@
+TS,LOTE,TIPO,METRICA,VARIABLE,VALOR,UMBRAL,VENTANA,SEVERIDAD,DESTINATARIO,ACCION
+2026-11-24 03:25:42.666326,3,desempeno,wape_modelo,,0.12579433659840863,> 0.0945 (media CV + 2 desv.),1 lote,Alta,Equipo de datos,Diagnosticar el tipo de deriva; 2 lotes seguidos disparan el reentrenamiento
+2026-11-24 03:57:31.603309,6,deriva,psi,competition_distance_m,0.4360435016640381,> 0.25,1 lote,Alta,Equipo de datos,Revisar la fuente de la variable y evaluar reentrenamiento si el desempeno cae
+2026-11-24 03:57:53.873325,6,desempeno,wape_modelo,,0.173979101597738,> 0.0945 (media CV + 2 desv.),1 lote,Alta,Equipo de datos,Diagnosticar el tipo de deriva; 2 lotes seguidos disparan el reentrenamiento
+2026-11-24 03:57:53.873325,6,desempeno,modelo_peor_que_regla,,0.173979101597738,WAPE modelo > WAPE regla,1 lote,Critica,Equipo de datos y jefe de operaciones de tiendas,"Si se repite tras reentrenar, activar MODO_RESPALDO (criterio de retirada)"
+2026-11-24 03:57:31.603309,6,datos,pct_fuera_de_rango,competition_distance_m,6.3364569388665775,> 5%,1 lote,Media,Equipo de datos,Revisar la fuente; el modelo extrapola fuera de lo que vio al entrenar
+2026-11-24 03:58:34.630352,7,deriva,psi,competition_distance_m,0.4407501336736858,> 0.25,1 lote,Alta,Equipo de datos,Revisar la fuente de la variable y evaluar reentrenamiento si el desempeno cae
+2026-11-24 03:58:56.444985,7,desempeno,wape_modelo,,0.15134788002672672,> 0.0945 (media CV + 2 desv.),1 lote,Alta,Equipo de datos,Diagnosticar el tipo de deriva; 2 lotes seguidos disparan el reentrenamiento
+2026-11-24 03:58:34.630352,7,datos,pct_fuera_de_rango,competition_distance_m,6.379155435759209,> 5%,1 lote,Media,Equipo de datos,Revisar la fuente; el modelo extrapola fuera de lo que vio al entrenar
+2026-11-24 04:12:00.141278,8,deriva,psi,competition_distance_m,0.4380702792869534,> 0.25,1 lote,Alta,Equipo de datos,Revisar la fuente de la variable y evaluar reentrenamiento si el desempeno cae
+2026-11-24 04:12:24.120150,8,desempeno,wape_modelo,,0.15528048946245623,> 0.0945 (media CV + 2 desv.),1 lote,Alta,Equipo de datos,Diagnosticar el tipo de deriva; 2 lotes seguidos disparan el reentrenamiento
+2026-11-24 04:12:24.120150,8,desempeno,modelo_peor_que_regla,,0.15528048946245623,WAPE modelo > WAPE regla,1 lote,Critica,Equipo de datos y jefe de operaciones de tiendas,"Si se repite tras reentrenar, activar MODO_RESPALDO (criterio de retirada)"
+2026-11-24 04:12:00.141278,8,datos,pct_fuera_de_rango,competition_distance_m,6.342683580489548,> 5%,1 lote,Media,Equipo de datos,Revisar la fuente; el modelo extrapola fuera de lo que vio al entrenar

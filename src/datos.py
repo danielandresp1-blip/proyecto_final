@@ -13,14 +13,19 @@ TABLA_OBT = "PSET2_ROSSMANN.OBT.OBT_SALES_DAILY"
 
 
 def _llave_privada() -> dict:
-    """En tu equipo se usa secrets/rsa_key.p8. En los contenedores que lanza Kestra la llave llega
-    como texto PEM en LLAVE_PRIVADA_PEM (secreto de Kestra) y se pasa en memoria."""
-    pem = os.getenv("LLAVE_PRIVADA_PEM")
-    if not pem:
-        return {"private_key_file": str(RAIZ / "secrets" / "rsa_key.p8")}
+    """La llave se lee y se pasa en memoria (private_key). En los contenedores que lanza Kestra llega
+    como texto PEM en LLAVE_PRIVADA_PEM; en el resto se lee de un archivo (LLAVE_PRIVADA_RUTA o
+    secrets/rsa_key.p8). No se usa private_key_file porque el conector rechaza los archivos que
+    Docker en Windows monta con permisos amplios."""
     from cryptography.hazmat.primitives import serialization
 
-    llave = serialization.load_pem_private_key(pem.encode(), password=None)
+    pem = os.getenv("LLAVE_PRIVADA_PEM")
+    if pem:
+        contenido = pem.encode()
+    else:
+        ruta = os.getenv("LLAVE_PRIVADA_RUTA", str(RAIZ / "secrets" / "rsa_key.p8"))
+        contenido = Path(ruta).read_bytes()
+    llave = serialization.load_pem_private_key(contenido, password=None)
     return {"private_key": llave.private_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PrivateFormat.PKCS8,
