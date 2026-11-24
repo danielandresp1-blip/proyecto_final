@@ -158,6 +158,9 @@ services:
 
   # ---------- Servicio y monitoreo (PSet 4) ----------
   api:
+    # Imagen publicada por cd.yml en GitHub Container Registry (tag = hash del commit).
+    # API_TAG en .env fija la version; sin el, usa latest. Para desarrollo local: docker compose up -d --build api
+    image: ghcr.io/danielandresp1-blip/proyecto_final-api:${API_TAG:-latest}
     build: ./api
     depends_on:
       - mlflow
