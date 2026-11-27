@@ -9,7 +9,7 @@ Kaggle → Kestra → Snowflake RAW → dbt (BRONZE → SILVER → GOLD) → Spa
        → simulación de producción (Kestra) → monitoreo y alertas → reentrenamiento con aprobación humana
 ```
 
-![Arquitectura](docs/arquitectura.png)
+![Arquitectura](docs/arquitectura_final.png)
 
 **Resultado:** en la simulación de 8 lotes (2015-06-20 a 2015-07-31), planificar con el modelo redujo el costo de turnos
 mal asignados un 43 % frente a la regla actual del gerente y ganó en los 8 lotes, incluidos los tres con deriva inducida.

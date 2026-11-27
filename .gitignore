@@ -30,3 +30,4 @@ kestra/*_proyecto.rossmann_*
 
 # Pruebas
 .pytest_cache/
+video/
